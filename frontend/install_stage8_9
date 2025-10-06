@@ -1,0 +1,656 @@
+#!/bin/bash
+
+# =====================================================
+# THANKS PWA - STAGE 8+9: UI/UX и WebSocket
+# =====================================================
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+PROJECT_DIR="/opt/thanks"
+
+echo -e "${GREEN}================================${NC}"
+echo -e "${GREEN}THANKS PWA - Stage 8+9 Installation${NC}"
+echo -e "${GREEN}UI/UX улучшения и WebSocket${NC}"
+echo -e "${GREEN}================================${NC}\n"
+
+if [ "$EUID" -ne 0 ]; then 
+   echo -e "${RED}Запустите скрипт с правами root (sudo)${NC}"
+   exit 1
+fi
+
+systemctl stop thanks-backend
+
+# =====================================================
+# 1. Установка Socket.IO для WebSocket
+# =====================================================
+echo -e "${YELLOW}[1/5] Установка Socket.IO...${NC}"
+
+cat >> $PROJECT_DIR/backend/requirements.txt <<EOF
+python-socketio==5.11.0
+aiohttp==3.9.1
+EOF
+
+cd $PROJECT_DIR/backend
+source venv/bin/activate
+pip install python-socketio==5.11.0 aiohttp==3.9.1
+
+# =====================================================
+# 2. Добавление WebSocket в Backend
+# =====================================================
+echo -e "${YELLOW}[2/5] Настройка WebSocket...${NC}"
+
+cat > $PROJECT_DIR/backend/websocket.py <<'EOF'
+import socketio
+from typing import Set
+
+# Создание Socket.IO сервера
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*'
+)
+
+# Хранилище подключенных клиентов по ролям
+connected_clients = {
+    'waiters': set(),
+    'admins': set(),
+    'users': set()
+}
+
+@sio.event
+async def connect(sid, environ):
+    print(f"Client connected: {sid}")
+
+@sio.event
+async def disconnect(sid):
+    print(f"Client disconnected: {sid}")
+    # Удалить из всех групп
+    for group in connected_clients.values():
+        group.discard(sid)
+
+@sio.event
+async def join_room(sid, data):
+    """Клиент присоединяется к комнате по роли"""
+    role = data.get('role', 'users')
+    if role in connected_clients:
+        connected_clients[role].add(sid)
+        await sio.emit('joined', {'role': role}, room=sid)
+
+@sio.event
+async def new_order(sid, data):
+    """Уведомление о новом заказе официантам"""
+    for waiter_sid in connected_clients['waiters']:
+        await sio.emit('order_created', data, room=waiter_sid)
+
+@sio.event
+async def order_status_changed(sid, data):
+    """Уведомление об изменении статуса заказа"""
+    # Отправить пользователю
+    for user_sid in connected_clients['users']:
+        await sio.emit('order_updated', data, room=user_sid)
+    
+    # Отправить официантам
+    for waiter_sid in connected_clients['waiters']:
+        await sio.emit('order_updated', data, room=waiter_sid)
+
+@sio.event
+async def waiter_called(sid, data):
+    """Уведомление о вызове официанта"""
+    for waiter_sid in connected_clients['waiters']:
+        await sio.emit('call_received', data, room=waiter_sid)
+
+async def notify_new_order(order_data):
+    """Функция для уведомления о новом заказе"""
+    for waiter_sid in connected_clients['waiters']:
+        await sio.emit('order_created', order_data, room=waiter_sid)
+
+async def notify_status_change(order_data):
+    """Функция для уведомления об изменении статуса"""
+    for user_sid in connected_clients['users']:
+        await sio.emit('order_updated', order_data, room=user_sid)
+    for waiter_sid in connected_clients['waiters']:
+        await sio.emit('order_updated', order_data, room=waiter_sid)
+EOF
+
+# Обновление main.py для интеграции Socket.IO
+cat >> $PROJECT_DIR/backend/main.py <<'EOF'
+
+# =====================================================
+# WebSocket интеграция (Stage 9)
+# =====================================================
+from websocket import sio
+import socketio
+
+# Создать ASGI приложение с Socket.IO
+socket_app = socketio.ASGIApp(sio, app)
+EOF
+
+# =====================================================
+# 3. Улучшение UI - Liquid Glass эффекты
+# =====================================================
+echo -e "${YELLOW}[3/5] Добавление улучшенного UI...${NC}"
+
+# Обновление Login с Liquid Glass
+cat > $PROJECT_DIR/frontend/src/pages/Login.jsx <<'EOF'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import axios from 'axios'
+
+export default function Login({ setToken }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const navigate = useNavigate()
+
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    
+    try {
+      const formData = new FormData()
+      formData.append('username', email)
+      formData.append('password', password)
+      
+      const response = await axios.post('/api/auth/login', formData)
+      localStorage.setItem('token', response.data.access_token)
+      localStorage.setItem('user', JSON.stringify(response.data.user))
+      setToken(response.data.access_token)
+      navigate('/dashboard')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Ошибка входа')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500">
+      {/* Анимированный фон */}
+      <div className="absolute inset-0">
+        <div className="absolute top-20 left-20 w-72 h-72 bg-white/10 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-20 right-20 w-96 h-96 bg-white/10 rounded-full blur-3xl animate-pulse delay-1000"></div>
+      </div>
+
+      {/* Glass Card */}
+      <div className="relative min-h-screen flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          {/* Liquid Glass эффект */}
+          <div className="bg-white/20 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/30 p-8 relative overflow-hidden">
+            {/* Глянцевый блик */}
+            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent"></div>
+            
+            <div className="relative z-10">
+              <h1 className="text-4xl font-bold text-center mb-3 text-white drop-shadow-lg">
+                Thanks PWA
+              </h1>
+              <p className="text-center text-white/90 mb-8 text-lg">Войдите в систему</p>
+              
+              <form onSubmit={handleLogin} className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-white/90 mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-4 py-3 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 focus:ring-2 focus:ring-white/50 focus:border-transparent outline-none transition"
+                    placeholder="admin@thanks.kz"
+                    required
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-white/90 mb-2">Пароль</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-3 bg-white/20 backdrop-blur-sm border border-white/30 rounded-xl text-white placeholder-white/60 focus:ring-2 focus:ring-white/50 focus:border-transparent outline-none transition"
+                    placeholder="••••••••"
+                    required
+                  />
+                </div>
+
+                {error && (
+                  <div className="bg-red-500/20 backdrop-blur-sm border border-red-300/30 text-white px-4 py-3 rounded-xl text-sm animate-shake">
+                    {error}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-white/30 backdrop-blur-sm hover:bg-white/40 text-white py-3 rounded-xl font-semibold border border-white/30 transition-all duration-300 transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? 'Вход...' : 'Войти'}
+                </button>
+              </form>
+
+              <div className="mt-6 text-center">
+                <p className="text-white/70 text-sm mb-2">Тестовые аккаунты:</p>
+                <div className="space-y-1 text-xs">
+                  <p className="text-white/80">Супер-админ: admin@thanks.kz</p>
+                  <p className="text-white/80">Админ: admin@restaurant.kz</p>
+                  <p className="text-white/80">Официант: waiter@restaurant.kz</p>
+                  <p className="text-white/60 mt-2">Пароль для всех: Bitcoin1</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-10px); }
+          75% { transform: translateX(10px); }
+        }
+        .animate-shake {
+          animation: shake 0.5s;
+        }
+        .delay-1000 {
+          animation-delay: 1s;
+        }
+      `}</style>
+    </div>
+  )
+}
+EOF
+
+# =====================================================
+# 4. Frontend WebSocket клиент
+# =====================================================
+echo -e "${YELLOW}[4/5] Настройка WebSocket клиента...${NC}"
+
+cd $PROJECT_DIR/frontend
+pnpm add socket.io-client
+
+# Создать WebSocket хук
+cat > $PROJECT_DIR/frontend/src/hooks/useSocket.js <<'EOF'
+import { useEffect, useState } from 'react'
+import io from 'socket.io-client'
+
+export function useSocket(url = 'http://217.11.74.100:8000') {
+  const [socket, setSocket] = useState(null)
+  const [connected, setConnected] = useState(false)
+
+  useEffect(() => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    const newSocket = io(url, {
+      transports: ['websocket', 'polling']
+    })
+
+    newSocket.on('connect', () => {
+      console.log('WebSocket connected')
+      setConnected(true)
+      
+      // Присоединиться к комнате по роли
+      if (user.role) {
+        newSocket.emit('join_room', { role: user.role })
+      }
+    })
+
+    newSocket.on('disconnect', () => {
+      console.log('WebSocket disconnected')
+      setConnected(false)
+    })
+
+    setSocket(newSocket)
+
+    return () => {
+      newSocket.close()
+    }
+  }, [url])
+
+  return { socket, connected }
+}
+EOF
+
+# Обновить панель официанта с WebSocket
+cat > $PROJECT_DIR/frontend/src/pages/waiter/WaiterDashboard.jsx <<'EOF'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import axios from 'axios'
+import { useSocket } from '../../hooks/useSocket'
+
+const ORDER_STATUSES = {
+  pending: { label: 'Ожидает', color: 'bg-gray-500', next: 'accepted' },
+  accepted: { label: 'Принят', color: 'bg-blue-500', next: 'cooking' },
+  cooking: { label: 'На кухне', color: 'bg-yellow-500', next: 'ready' },
+  ready: { label: 'Готов', color: 'bg-orange-500', next: 'serving' },
+  serving: { label: 'Несут', color: 'bg-purple-500', next: 'completed' },
+  completed: { label: 'Подан', color: 'bg-green-500', next: null }
+}
+
+export default function WaiterDashboard() {
+  const navigate = useNavigate()
+  const [user, setUser] = useState(null)
+  const [orders, setOrders] = useState([])
+  const [calls, setCalls] = useState([])
+  const [filter, setFilter] = useState('active')
+  const { socket, connected } = useSocket()
+
+  useEffect(() => {
+    fetchUser()
+  }, [])
+
+  useEffect(() => {
+    if (user) {
+      fetchOrders()
+      fetchCalls()
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (socket) {
+      socket.on('order_created', (data) => {
+        console.log('New order received:', data)
+        fetchOrders()
+      })
+
+      socket.on('order_updated', (data) => {
+        console.log('Order updated:', data)
+        fetchOrders()
+      })
+
+      socket.on('call_received', (data) => {
+        console.log('Waiter called:', data)
+        fetchCalls()
+      })
+
+      return () => {
+        socket.off('order_created')
+        socket.off('order_updated')
+        socket.off('call_received')
+      }
+    }
+  }, [socket])
+
+  const fetchUser = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setUser(response.data)
+    } catch (error) {
+      navigate('/login')
+    }
+  }
+
+  const fetchOrders = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/waiter/orders', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setOrders(response.data)
+    } catch (error) {
+      console.error('Error:', error)
+    }
+  }
+
+  const fetchCalls = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await axios.get('/api/waiter-calls', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setCalls(response.data)
+    } catch (error) {
+      console.error('Error:', error)
+    }
+  }
+
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const token = localStorage.getItem('token')
+      await axios.patch(`/api/orders/${orderId}/status?status=${newStatus}`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      if (socket) {
+        socket.emit('order_status_changed', { orderId, status: newStatus })
+      }
+      
+      fetchOrders()
+    } catch (error) {
+      console.error('Error:', error)
+    }
+  }
+
+  const resolveCall = async (callId) => {
+    try {
+      const token = localStorage.getItem('token')
+      await axios.patch(`/api/waiter-calls/${callId}/resolve`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      fetchCalls()
+    } catch (error) {
+      console.error('Error:', error)
+    }
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    navigate('/login')
+  }
+
+  const filteredOrders = orders.filter(order => {
+    if (filter === 'active') {
+      return ['pending', 'accepted', 'cooking', 'ready', 'serving'].includes(order.status)
+    }
+    return order.status === filter
+  })
+
+  const totalTips = orders.filter(o => o.is_paid).reduce((sum, o) => sum + o.tips_amount, 0)
+
+  if (!user) return <div className="min-h-screen flex items-center justify-center">Загрузка...</div>
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header с индикатором подключения */}
+      <header className="bg-white shadow-sm border-b sticky top-0 z-10">
+        <div className="px-4 py-3">
+          <div className="flex justify-between items-center mb-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold">Панель официанта</h1>
+                <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} 
+                     title={connected ? 'Подключено' : 'Отключено'}></div>
+              </div>
+              <p className="text-sm text-gray-600">{user.full_name}</p>
+            </div>
+            <button onClick={handleLogout} className="px-3 py-1 bg-red-500 text-white rounded-lg text-sm">
+              Выйти
+            </button>
+          </div>
+
+          <div className="flex gap-4 text-sm">
+            <div className="bg-blue-50 px-3 py-1 rounded">
+              <span className="text-gray-600">Заказов: </span>
+              <span className="font-bold">{filteredOrders.length}</span>
+            </div>
+            <div className="bg-green-50 px-3 py-1 rounded">
+              <span className="text-gray-600">Чаевые: </span>
+              <span className="font-bold">{totalTips.toFixed(0)} ₸</span>
+            </div>
+            {calls.length > 0 && (
+              <div className="bg-red-50 px-3 py-1 rounded animate-pulse">
+                <span className="text-red-600 font-bold">🔔 {calls.length}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-4 pb-2 overflow-x-auto">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setFilter('active')}
+              className={`px-3 py-1 rounded-full whitespace-nowrap text-sm ${
+                filter === 'active' ? 'bg-blue-600 text-white' : 'bg-gray-100'
+              }`}
+            >
+              Активные
+            </button>
+            {Object.entries(ORDER_STATUSES).map(([status, { label }]) => (
+              <button
+                key={status}
+                onClick={() => setFilter(status)}
+                className={`px-3 py-1 rounded-full whitespace-nowrap text-sm ${
+                  filter === status ? 'bg-blue-600 text-white' : 'bg-gray-100'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {calls.length > 0 && (
+        <div className="p-4 bg-red-50 border-b border-red-200">
+          <h2 className="font-bold text-red-800 mb-2">🔔 Вызовы гостей</h2>
+          <div className="space-y-2">
+            {calls.map(call => (
+              <div key={call.id} className="bg-white rounded-lg p-3 flex justify-between items-center">
+                <div>
+                  <div className="font-semibold">Стол #{call.table_id}</div>
+                  <div className="text-sm text-gray-600">
+                    {new Date(call.created_at).toLocaleTimeString('ru-RU')}
+                  </div>
+                </div>
+                <button
+                  onClick={() => resolveCall(call.id)}
+                  className="px-4 py-2 bg-green-500 text-white rounded-lg"
+                >
+                  Обработано
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="p-4 space-y-3 pb-20">
+        {filteredOrders.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            Нет заказов
+          </div>
+        ) : (
+          filteredOrders.map(order => (
+            <div key={order.id} className="bg-white rounded-xl shadow-md p-4">
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-lg">Заказ #{order.id}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-white text-xs ${ORDER_STATUSES[order.status]?.color}`}>
+                      {ORDER_STATUSES[order.status]?.label}
+                    </span>
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    Стол #{order.table_id} • {new Date(order.created_at).toLocaleTimeString('ru-RU')}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-bold text-lg">{order.total_amount} ₸</div>
+                  {order.tips_amount > 0 && (
+                    <div className="text-sm text-green-600">+{order.tips_amount} ₸</div>
+                  )}
+                </div>
+              </div>
+
+              {ORDER_STATUSES[order.status]?.next && (
+                <button
+                  onClick={() => updateOrderStatus(order.id, ORDER_STATUSES[order.status].next)}
+                  className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold"
+                >
+                  → {ORDER_STATUSES[ORDER_STATUSES[order.status].next]?.label}
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+EOF
+
+# =====================================================
+# 5. Сборка и запуск
+# =====================================================
+echo -e "${YELLOW}[5/5] Сборка и запуск...${NC}"
+
+cd $PROJECT_DIR/frontend
+pnpm run build
+systemctl reload nginx
+
+# Обновить systemd для запуска с Socket.IO
+cat > /etc/systemd/system/thanks-backend.service <<'EOF'
+[Unit]
+Description=Thanks PWA Backend
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/thanks/backend
+Environment="PATH=/opt/thanks/backend/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/opt/thanks/backend/venv/bin/uvicorn websocket:socket_app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl start thanks-backend
+sleep 3
+
+cat > /opt/thanks/scripts/update_stage8_9.sh <<'EOF'
+#!/bin/bash
+set -e
+echo "🔄 Обновление Stage 8+9..."
+systemctl stop thanks-backend
+cd /opt/thanks/backend
+source venv/bin/activate
+pip install -r requirements.txt --upgrade
+systemctl start thanks-backend
+cd /opt/thanks/frontend
+pnpm install
+pnpm run build
+systemctl reload nginx
+echo "✅ Stage 8+9 обновлены!"
+EOF
+
+chmod +x /opt/thanks/scripts/update_stage8_9.sh
+
+echo ""
+echo "════════════════════════════════════════════════"
+echo "✅ THANKS PWA - STAGE 8+9 УСТАНОВЛЕНЫ УСПЕШНО!"
+echo "════════════════════════════════════════════════"
+echo ""
+echo "✨ UI/UX улучшения:"
+echo "  ✅ Liquid Glass дизайн на странице входа"
+echo "  ✅ Анимированный градиентный фон"
+echo "  ✅ Полупрозрачные карточки с blur эффектом"
+echo "  ✅ Плавные переходы и анимации"
+echo ""
+echo "📡 WebSocket Real-time:"
+echo "  ✅ Мгновенные уведомления о заказах"
+echo "  ✅ Индикатор подключения"
+echo "  ✅ Автообновление статусов без polling"
+echo "  ✅ Real-time вызовы официанта"
+echo ""
+echo "🔗 URL: http://217.11.74.100"
+echo ""
+echo "📚 ВСЕ ЭТАПЫ ЗАВЕРШЕНЫ!"
+echo "════════════════════════════════════════════════"

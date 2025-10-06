@@ -1,0 +1,147 @@
+import { useEffect, useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import axios from 'axios'
+
+export default function Dashboard({ setToken }) {
+  const [user, setUser] = useState(null)
+  const [restaurant, setRestaurant] = useState(null)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const response = await axios.get('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        setUser(response.data)
+        
+        if (response.data.role === 'waiter') {
+          navigate('/waiter')
+          return
+        }
+        
+        if (response.data.restaurant_id) {
+          const restResponse = await axios.get(`/api/restaurants/${response.data.restaurant_id}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          })
+          setRestaurant(restResponse.data)
+        }
+      } catch (error) {
+        handleLogout()
+      }
+    }
+    fetchUser()
+  }, [])
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    setToken(null)
+    navigate('/login')
+  }
+
+  if (!user) return <div className="min-h-screen flex items-center justify-center">Загрузка...</div>
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 relative overflow-hidden">
+      <div className="absolute inset-0">
+        <div className="absolute top-40 left-20 w-96 h-96 bg-white/10 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-40 right-20 w-80 h-80 bg-white/10 rounded-full blur-3xl animate-pulse" style={{animationDelay: '1s'}}></div>
+      </div>
+
+      <header className="relative bg-white/20 backdrop-blur-lg border-b border-white/30">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold text-white drop-shadow-lg">Thanks PWA</h1>
+            {restaurant && <p className="text-sm text-white/90">{restaurant.name}</p>}
+          </div>
+          <button 
+            onClick={handleLogout} 
+            className="px-4 py-2 bg-white text-purple-600 hover:bg-white/90 rounded-lg font-semibold transition-all shadow-lg"
+          >
+            Выйти
+          </button>
+        </div>
+      </header>
+
+      <main className="relative max-w-7xl mx-auto px-4 py-8">
+        <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/30 p-6 mb-8">
+          <h2 className="text-xl font-semibold mb-2 text-gray-800">{user.full_name || 'Пользователь'}</h2>
+          <p className="text-gray-600">{user.email}</p>
+          <span className="inline-block mt-2 px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
+            {user.role.toUpperCase()}
+          </span>
+        </div>
+
+        {user.role === 'user' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Link to="/my-orders" className="group">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6 transition-all duration-300 hover:bg-white hover:scale-105">
+                <div className="text-4xl mb-4">📋</div>
+                <h3 className="text-xl font-semibold mb-2 text-gray-800">Мои заказы</h3>
+                <p className="text-gray-600">История заказов</p>
+              </div>
+            </Link>
+          </div>
+        )}
+
+        {user.role === 'moderator' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Link to="/admin/restaurants" className="group">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6 transition-all duration-300 hover:bg-white hover:scale-105">
+                <div className="text-4xl mb-4">🏪</div>
+                <h3 className="text-xl font-semibold mb-2 text-gray-800">Заведения</h3>
+                <p className="text-gray-600">Управление</p>
+              </div>
+            </Link>
+          </div>
+        )}
+
+        {(user.role === 'admin' || user.role === 'moderator' || user.role === 'owner') && user.restaurant_id && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-6">
+            <Link to={`/admin/menu/${user.restaurant_id}`} className="group">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6 transition-all duration-300 hover:bg-white hover:scale-105">
+                <div className="text-4xl mb-4">📋</div>
+                <h3 className="text-xl font-semibold mb-2 text-gray-800">Меню</h3>
+                <p className="text-gray-600">Управление</p>
+              </div>
+            </Link>
+            
+            <Link to={`/admin/halls/${user.restaurant_id}`} className="group">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6 transition-all duration-300 hover:bg-white hover:scale-105">
+                <div className="text-4xl mb-4">🪑</div>
+                <h3 className="text-xl font-semibold mb-2 text-gray-800">Залы</h3>
+                <p className="text-gray-600">Столы и QR</p>
+              </div>
+            </Link>
+
+            <Link to={`/admin/reservations/${user.restaurant_id}`} className="group">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6 transition-all duration-300 hover:bg-white hover:scale-105">
+                <div className="text-4xl mb-4">📅</div>
+                <h3 className="text-xl font-semibold mb-2 text-gray-800">Бронирования</h3>
+                <p className="text-gray-600">Управление</p>
+              </div>
+            </Link>
+
+            <Link to={`/admin/analytics/${user.restaurant_id}`} className="group">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6 transition-all duration-300 hover:bg-white hover:scale-105">
+                <div className="text-4xl mb-4">📊</div>
+                <h3 className="text-xl font-semibold mb-2 text-gray-800">Аналитика</h3>
+                <p className="text-gray-600">Статистика</p>
+              </div>
+            </Link>
+          </div>
+        )}
+
+        <div className="mt-8 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl shadow-xl p-8">
+          <h3 className="text-2xl font-bold mb-4 text-white">Система готова</h3>
+          <ul className="space-y-2 text-white">
+            <li>✓ Все модули установлены</li>
+            <li>✓ WebSocket real-time</li>
+            <li>✓ Современный дизайн</li>
+          </ul>
+        </div>
+      </main>
+    </div>
+  )
+}

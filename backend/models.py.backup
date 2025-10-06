@@ -1,0 +1,152 @@
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, ForeignKey, JSON, Enum
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
+from datetime import datetime
+import enum
+
+Base = declarative_base()
+
+class UserRole(str, enum.Enum):
+    GUEST = "guest"
+    USER = "user"
+    WAITER = "waiter"
+    ADMIN = "admin"
+    OWNER = "owner"
+    MODERATOR = "moderator"
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    full_name = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    role = Column(Enum(UserRole), default=UserRole.GUEST)
+    is_active = Column(Boolean, default=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    restaurant = relationship("Restaurant", back_populates="staff")
+
+class Restaurant(Base):
+    __tablename__ = "restaurants"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, index=True)
+    description = Column(Text, nullable=True)
+    logo_url = Column(String, nullable=True)
+    
+    # Контакты
+    address = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    website = Column(String, nullable=True)
+    
+    # Часы работы (JSON: {"monday": "10:00-22:00", ...})
+    working_hours = Column(JSON, default={})
+    
+    # Настройки
+    currency = Column(String, default="KZT")
+    timezone = Column(String, default="Asia/Almaty")
+    service_fee_percent = Column(Float, default=0.0)
+    
+    # Политики чаевых
+    tips_enabled = Column(Boolean, default=True)
+    tips_options = Column(JSON, default=[5, 10, 15, 20])  # Проценты
+    
+    # Статус
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Отношения
+    staff = relationship("User", back_populates="restaurant")
+    categories = relationship("Category", back_populates="restaurant", cascade="all, delete-orphan")
+    halls = relationship("Hall", back_populates="restaurant", cascade="all, delete-orphan")
+
+class Category(Base):
+    __tablename__ = "categories"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    name_kz = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    restaurant = relationship("Restaurant", back_populates="categories")
+    dishes = relationship("Dish", back_populates="category", cascade="all, delete-orphan")
+
+class Dish(Base):
+    __tablename__ = "dishes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
+    name = Column(String, nullable=False)
+    name_kz = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    description_kz = Column(Text, nullable=True)
+    
+    # Цена и изображение
+    price = Column(Float, nullable=False)
+    image_url = Column(String, nullable=True)
+    
+    # Характеристики
+    cooking_time = Column(Integer, default=15)  # минуты
+    weight = Column(Integer, nullable=True)  # граммы
+    calories = Column(Integer, nullable=True)
+    allergens = Column(JSON, default=[])  # ["молоко", "глютен", ...]
+    
+    # Статус
+    is_available = Column(Boolean, default=True)
+    is_stop_list = Column(Boolean, default=False)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    category = relationship("Category", back_populates="dishes")
+    modifiers = relationship("Modifier", back_populates="dish", cascade="all, delete-orphan")
+
+class Modifier(Base):
+    __tablename__ = "modifiers"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    dish_id = Column(Integer, ForeignKey("dishes.id"), nullable=False)
+    name = Column(String, nullable=False)
+    name_kz = Column(String, nullable=True)
+    price = Column(Float, default=0.0)
+    is_required = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    dish = relationship("Dish", back_populates="modifiers")
+
+class Hall(Base):
+    __tablename__ = "halls"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    restaurant = relationship("Restaurant", back_populates="halls")
+    tables = relationship("Table", back_populates="hall", cascade="all, delete-orphan")
+
+class Table(Base):
+    __tablename__ = "tables"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    hall_id = Column(Integer, ForeignKey("halls.id"), nullable=False)
+    table_number = Column(String, nullable=False)
+    capacity = Column(Integer, default=2)
+    qr_code = Column(String, unique=True, index=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    hall = relationship("Hall", back_populates="tables")
